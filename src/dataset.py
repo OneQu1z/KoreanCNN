@@ -1,145 +1,173 @@
 """
 Модуль для работы с датасетом корейских букв
+
+Использует генерацию изображений через корейские шрифты, установленные в системе.
 """
-import os
-from pathlib import Path
 import torch
-from torch.utils.data import Dataset
-import numpy as np
+from torch.utils.data import Dataset, DataLoader, random_split
 
-from src.config import RAW_DATA_DIR, PROCESSED_DATA_DIR, CLASS_LABELS, CLASS_TO_IDX, NUM_CLASSES
-from src.utils import log_info, log_warning
+from src.config import (
+    RAW_DATA_DIR, CLASS_LABELS, NUM_CLASSES, 
+    IMAGE_SIZE, TRAIN_VAL_SPLIT
+)
+from src.utils import log_info, log_warning, set_seed
+from src.datasets.font_based import FontBasedDataset
 
 
-def download_dataset():
+class ImageTransform:
     """
-    Функция для загрузки датасета корейских букв
+    Класс для трансформаций изображений без использования torchvision
+    """
+    def __init__(self, resize_size, normalize=True):
+        """
+        Args:
+            resize_size (tuple): Размер для изменения размера (height, width)
+            normalize (bool): Нормализовать ли изображение в [-1, 1]
+        """
+        self.resize_size = resize_size
+        self.normalize = normalize
     
-    TODO: Реализовать загрузку реального датасета
-    Возможные источники:
-    - Hangul Fonts Dataset
-    - KMNIST (Korean Modified MNIST)
-    - Собственный сбор данных
+    def __call__(self, image):
+        """
+        Применяет трансформации к изображению
+        
+        Args:
+            image: PIL.Image или numpy array
+            
+        Returns:
+            torch.Tensor: Тензор изображения [C, H, W]
+        """
+        import numpy as np
+        from PIL import Image
+        
+        # Если это PIL Image, конвертируем в grayscale если нужно
+        if isinstance(image, Image.Image):
+            if image.mode != 'L':
+                image = image.convert('L')
+            # Изменяем размер
+            image = image.resize(self.resize_size[::-1], Image.Resampling.LANCZOS)  # PIL использует (width, height)
+        
+        # Преобразуем в numpy array
+        if isinstance(image, Image.Image):
+            img_array = np.array(image, dtype=np.float32)
+        else:
+            img_array = np.array(image, dtype=np.float32)
+        
+        # Нормализуем в [0, 1]
+        if img_array.max() > 1.0:
+            img_array = img_array / 255.0
+        
+        # Преобразуем в тензор [H, W]
+        img_tensor = torch.from_numpy(img_array)
+        
+        # Добавляем канал [1, H, W] для grayscale
+        if len(img_tensor.shape) == 2:
+            img_tensor = img_tensor.unsqueeze(0)
+        
+        # Нормализуем в [-1, 1] если нужно
+        if self.normalize:
+            img_tensor = (img_tensor - 0.5) / 0.5
+        
+        return img_tensor
+
+
+def get_transforms(is_training=False):
+    """
+    Возвращает трансформации для предобработки изображений
     
+    Args:
+        is_training (bool): Если True, добавляются аугментации для обучения (TODO)
+        
     Returns:
-        bool: True если датасет успешно загружен, False в противном случае
+        ImageTransform: Объект трансформации
     """
-    log_info("Проверка наличия датасета...")
-    
-    # Проверяем, существует ли уже обработанный датасет
-    if PROCESSED_DATA_DIR.exists() and any(PROCESSED_DATA_DIR.iterdir()):
-        log_info("Обработанные данные найдены в data/processed/")
-        return True
-    
-    # Проверяем, существует ли исходный датасет
-    if RAW_DATA_DIR.exists() and any(RAW_DATA_DIR.iterdir()):
-        log_info("Исходные данные найдены в data/raw/")
-        log_warning("Требуется обработка данных. Используются dummy данные.")
-        return False
-    
-    log_warning("Реальный датасет не найден. Используются dummy данные для тестирования.")
-    log_warning("TODO: Реализовать загрузку датасета корейских букв")
-    return False
+    return ImageTransform(resize_size=IMAGE_SIZE, normalize=True)
 
 
 class KoreanAlphabetDataset(Dataset):
     """
-    Датасет для корейских букв (ㄱ, ㄴ, ㄷ, ㄹ, ㅁ)
+    Класс датасета для корейских букв
     
-    Пока что возвращает dummy данные для тестирования структуры проекта.
-    TODO: Заменить на реальные данные после загрузки датасета.
+    Генерирует изображения используя корейские шрифты, установленные в системе.
     """
     
-    def __init__(self, root_dir=None, transform=None, use_real_data=False, num_samples=1000, image_size=(28, 28)):
+    def __init__(self, root_dir=None, transform=None, **kwargs):
         """
         Инициализация датасета
         
         Args:
             root_dir (Path, optional): Корневая директория с данными
             transform (callable, optional): Трансформации для применения к изображениям
-            use_real_data (bool): Использовать ли реальные данные (если доступны)
-            num_samples (int): Количество сэмплов для dummy данных
-            image_size (tuple): Размер изображений (height, width)
+            **kwargs: Дополнительные аргументы для FontBasedDataset
         """
-        self.root_dir = root_dir or RAW_DATA_DIR
-        self.transform = transform
-        self.use_real_data = use_real_data
-        self.num_samples = num_samples
-        self.image_size = image_size
+        # Создаем датасет на основе шрифтов
+        if transform is None:
+            transform = get_transforms(is_training=False)
         
-        # Проверяем доступность реальных данных
-        if use_real_data:
-            data_available = download_dataset()
-            if not data_available:
-                log_warning("Реальные данные недоступны, используются dummy данные")
-                self.use_real_data = False
-        
-        if not self.use_real_data:
-            log_info(f"Использование dummy данных: {num_samples} сэмплов")
-            # TODO: Заменить на реальную загрузку данных
-        
-        # Генерируем метки для dummy данных (равномерно распределенные по классам)
-        samples_per_class = num_samples // NUM_CLASSES
-        self.labels = []
-        for class_idx in range(NUM_CLASSES):
-            self.labels.extend([class_idx] * samples_per_class)
-        
-        # Добавляем оставшиеся сэмплы к первому классу для точного количества
-        remaining = num_samples - len(self.labels)
-        self.labels.extend([0] * remaining)
-        
-        log_info(f"Датасет инициализирован: {len(self.labels)} сэмплов, {NUM_CLASSES} классов")
+        self._dataset = FontBasedDataset(
+            root_dir=root_dir,
+            transform=transform,
+            **kwargs
+        )
     
     def __len__(self):
-        """
-        Возвращает размер датасета
-        
-        Returns:
-            int: Количество сэмплов в датасете
-        """
-        return len(self.labels)
+        """Возвращает размер датасета"""
+        return len(self._dataset)
     
     def __getitem__(self, idx):
-        """
-        Возвращает один сэмпл из датасета
-        
-        Args:
-            idx (int): Индекс сэмпла
-            
-        Returns:
-            tuple: (image, label) где image - тензор изображения, label - индекс класса
-        """
-        if self.use_real_data:
-            # TODO: Реализовать загрузку реального изображения
-            # image = load_image_from_disk(idx)
-            # label = self.labels[idx]
-            pass
-        
-        # Генерируем dummy изображение (случайные пиксели)
-        # В реальном датасете это будет загруженное изображение
-        image = np.random.rand(*self.image_size).astype(np.float32)
-        
-        # Применяем трансформации если они указаны
-        if self.transform:
-            image = self.transform(image)
-        else:
-            # Преобразуем в тензор если трансформаций нет
-            image = torch.from_numpy(image)
-            # Добавляем канал (1 channel для grayscale)
-            image = image.unsqueeze(0)
-        
-        label = self.labels[idx]
-        
-        return image, label
+        """Возвращает один сэмпл из датасета"""
+        return self._dataset[idx]
     
     def get_class_name(self, class_idx):
-        """
-        Возвращает имя класса по индексу
+        """Возвращает имя класса по индексу"""
+        return self._dataset.get_class_name(class_idx)
+
+
+def get_dataloaders(dataset, batch_size=32, train_val_split=0.8, seed=42):
+    """
+    Создает DataLoader'ы для обучения и валидации
+    
+    Args:
+        dataset: Полный датасет
+        batch_size (int): Размер батча
+        train_val_split (float): Доля данных для обучения (остальное для валидации)
+        seed (int): Seed для воспроизводимости разделения
         
-        Args:
-            class_idx (int): Индекс класса
-            
-        Returns:
-            str: Метка класса (например, "ㄱ")
-        """
-        return CLASS_LABELS[class_idx]
+    Returns:
+        tuple: (train_loader, val_loader)
+    """
+    # Устанавливаем seed для воспроизводимости разделения
+    set_seed(seed)
+    
+    # Вычисляем размеры
+    total_size = len(dataset)
+    train_size = int(train_val_split * total_size)
+    val_size = total_size - train_size
+    
+    log_info(f"Разделение датасета: {train_size} для обучения, {val_size} для валидации")
+    
+    # Разделяем датасет
+    train_dataset, val_dataset = random_split(
+        dataset, 
+        [train_size, val_size],
+        generator=torch.Generator().manual_seed(seed)
+    )
+    
+    # Создаем DataLoader'ы
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=0,  # 0 для Windows совместимости
+        pin_memory=True if torch.cuda.is_available() else False
+    )
+    
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=0,
+        pin_memory=True if torch.cuda.is_available() else False
+    )
+    
+    return train_loader, val_loader
