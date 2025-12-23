@@ -12,14 +12,67 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from datetime import datetime
+import matplotlib
+matplotlib.use('Agg')  # Используем backend без GUI для серверов
+import matplotlib.pyplot as plt
 
 from src.config import (
-    MODELS_DIR, DEVICE, CLASS_LABELS, NUM_CLASSES, IMAGE_SIZE, 
+    MODELS_DIR, PLOTS_DIR, DEVICE, CLASS_LABELS, NUM_CLASSES, IMAGE_SIZE, 
     BATCH_SIZE, TRAIN_VAL_SPLIT, LEARNING_RATE, NUM_EPOCHS, TARGET_ACCURACY
 )
 from src.utils import set_seed, log_info, log_warning
 from src.dataset import KoreanAlphabetDataset, get_transforms, get_dataloaders
 from src.model import create_model
+
+
+def plot_training_history(epochs, train_loss, val_loss, train_acc, val_acc, save_path):
+    """
+    Строит графики loss и accuracy и сохраняет их в файл
+    
+    Args:
+        epochs (list): Список номеров эпох
+        train_loss (list): История loss на train set
+        val_loss (list): История loss на validation set
+        train_acc (list): История accuracy на train set
+        val_acc (list): История accuracy на validation set
+        save_path (Path): Путь для сохранения графика
+    """
+    # Создаем figure с двумя subplot'ами
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+    
+    # График Loss
+    ax1.plot(epochs, train_loss, 'b-o', label='Train Loss', linewidth=2, markersize=6)
+    ax1.plot(epochs, val_loss, 'r-s', label='Validation Loss', linewidth=2, markersize=6)
+    ax1.set_xlabel('Эпоха', fontsize=12)
+    ax1.set_ylabel('Loss', fontsize=12)
+    ax1.set_title('Loss по эпохам', fontsize=14, fontweight='bold')
+    ax1.legend(fontsize=10)
+    ax1.grid(True, alpha=0.3)
+    ax1.set_xlim(left=0.5, right=len(epochs) + 0.5)
+    
+    # График Accuracy
+    ax2.plot(epochs, train_acc, 'b-o', label='Train Accuracy', linewidth=2, markersize=6)
+    ax2.plot(epochs, val_acc, 'r-s', label='Validation Accuracy', linewidth=2, markersize=6)
+    ax2.set_xlabel('Эпоха', fontsize=12)
+    ax2.set_ylabel('Accuracy (%)', fontsize=12)
+    ax2.set_title('Accuracy по эпохам', fontsize=14, fontweight='bold')
+    ax2.legend(fontsize=10)
+    ax2.grid(True, alpha=0.3)
+    ax2.set_xlim(left=0.5, right=len(epochs) + 0.5)
+    ax2.set_ylim(bottom=0, top=105)
+    
+    # Общий заголовок
+    plt.suptitle('Метрики обучения CNN для распознавания корейских букв', 
+                 fontsize=16, fontweight='bold', y=1.02)
+    
+    # Улучшаем layout
+    plt.tight_layout()
+    
+    # Сохраняем график
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.close()  # Закрываем figure для освобождения памяти
+    
+    log_info(f"Графики сохранены: {save_path}")
 
 
 def main():
@@ -130,6 +183,13 @@ def main():
     best_accuracy = 0.0
     best_model_path = None
     
+    # История метрик для визуализации
+    train_loss_history = []
+    train_accuracy_history = []
+    val_loss_history = []
+    val_accuracy_history = []
+    epochs_list = []
+    
     for epoch in range(1, NUM_EPOCHS + 1):
         log_info("\n" + "-" * 50)
         log_info(f"Эпоха {epoch}/{NUM_EPOCHS}")
@@ -194,6 +254,13 @@ def main():
         log_info(f"Train - Loss: {epoch_loss:.4f} | Accuracy: {train_accuracy:.2f}% ({correct}/{total})")
         log_info(f"Val   - Loss: {avg_val_loss:.4f} | Accuracy: {val_accuracy:.2f}% ({val_correct}/{val_total})")
         
+        # Сохраняем метрики в историю
+        epochs_list.append(epoch)
+        train_loss_history.append(epoch_loss)
+        train_accuracy_history.append(train_accuracy)
+        val_loss_history.append(avg_val_loss)
+        val_accuracy_history.append(val_accuracy)
+        
         # Сохраняем модель, если она лучшая (по validation accuracy)
         if val_accuracy > best_accuracy:
             best_accuracy = val_accuracy
@@ -228,16 +295,35 @@ def main():
             log_info(f"{'='*50}")
             break
     
+    # Визуализация метрик
+    log_info("\n" + "-" * 50)
+    log_info("Создание графиков метрик обучения...")
+    log_info("-" * 50)
+    
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    plot_filename = f"training_history_{timestamp}.png"
+    plot_path = PLOTS_DIR / plot_filename
+    
+    plot_training_history(
+        epochs=epochs_list,
+        train_loss=train_loss_history,
+        val_loss=val_loss_history,
+        train_acc=train_accuracy_history,
+        val_acc=val_accuracy_history,
+        save_path=plot_path
+    )
+    
     # Финальная информация
     log_info("\n" + "=" * 50)
     log_info("Обучение завершено!")
     log_info(f"Лучшая accuracy: {best_accuracy:.2f}%")
     if best_model_path:
         log_info(f"Лучшая модель сохранена: {best_model_path.name}")
+    log_info(f"График метрик сохранен: {plot_path.name}")
     log_info("=" * 50)
     
     log_info("\n" + "=" * 50)
-    log_info("STEP 5 завершен успешно!")
+    log_info("STEP 6 завершен успешно!")
     log_info("=" * 50)
     
     # Выход с кодом 0 (успешное завершение)

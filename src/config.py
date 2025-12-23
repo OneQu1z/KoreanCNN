@@ -11,12 +11,14 @@ DATA_DIR = PROJECT_ROOT / "data"
 RAW_DATA_DIR = DATA_DIR / "raw"
 PROCESSED_DATA_DIR = DATA_DIR / "processed"
 MODELS_DIR = PROJECT_ROOT / "models"
+PLOTS_DIR = PROJECT_ROOT / "plots"  # Директория для графиков
 
 # Создаем директории если их нет
 DATA_DIR.mkdir(exist_ok=True)
 RAW_DATA_DIR.mkdir(exist_ok=True)
 PROCESSED_DATA_DIR.mkdir(exist_ok=True)
 MODELS_DIR.mkdir(exist_ok=True)
+PLOTS_DIR.mkdir(exist_ok=True)
 
 # Метки классов корейских букв
 CLASS_LABELS = ["ㄱ", "ㄴ", "ㄷ", "ㄹ", "ㅁ"]
