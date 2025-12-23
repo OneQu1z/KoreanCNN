@@ -2,6 +2,7 @@
 Конфигурация проекта
 """
 import os
+import torch
 from pathlib import Path
 
 # Базовые пути проекта
@@ -17,5 +18,28 @@ RAW_DATA_DIR.mkdir(exist_ok=True)
 PROCESSED_DATA_DIR.mkdir(exist_ok=True)
 MODELS_DIR.mkdir(exist_ok=True)
 
-# TODO: Добавить параметры модели и обучения в следующих шагах
+# Метки классов корейских букв
+CLASS_LABELS = ["ㄱ", "ㄴ", "ㄷ", "ㄹ", "ㅁ"]
+NUM_CLASSES = len(CLASS_LABELS)
+
+# Словарь для обратного преобразования (индекс -> метка)
+CLASS_TO_IDX = {label: idx for idx, label in enumerate(CLASS_LABELS)}
+IDX_TO_CLASS = {idx: label for label, idx in CLASS_TO_IDX.items()}
+
+
+def get_device():
+    """
+    Определяет доступное устройство для вычислений (CUDA или CPU)
+    
+    Returns:
+        torch.device: Устройство для выполнения операций PyTorch
+    """
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    else:
+        return torch.device("cpu")
+
+
+# Глобальная переменная для устройства (можно переопределить при необходимости)
+DEVICE = get_device()
 
