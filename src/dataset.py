@@ -14,18 +14,123 @@ from src.utils import log_info, log_warning, set_seed
 from src.datasets.font_based import FontBasedDataset
 
 
+def center_image(image, target_size=None):
+    """
+    Центрирует содержимое изображения, находя bounding box непустой области
+    
+    Args:
+        image: PIL.Image - входное изображение
+        target_size (tuple, optional): Целевой размер (width, height). Если None, сохраняется исходный размер
+        
+    Returns:
+        PIL.Image: Центрированное изображение
+    """
+    import numpy as np
+    from PIL import Image
+    
+    # Конвертируем в grayscale если нужно
+    if image.mode != 'L':
+        img_gray = image.convert('L')
+    else:
+        img_gray = image
+    
+    # Преобразуем в numpy array
+    img_array = np.array(img_gray)
+    
+    # Находим bounding box непустой области
+    # Ищем все пиксели, которые не являются фоном
+    # Используем адаптивный порог: находим разницу между максимумом и минимумом
+    img_min = img_array.min()
+    img_max = img_array.max()
+    
+    if img_max > img_min:
+        # Используем адаптивный порог: считаем фоном пиксели близкие к максимуму
+        # Для темных символов на светлом фоне используем порог на 15% ниже максимума
+        # Это позволяет лучше находить темные символы даже если они не очень темные
+        threshold = img_min + (img_max - img_min) * 0.85
+        coords = np.where(img_array < threshold)
+    else:
+        # Если изображение однотонное, возвращаем как есть
+        coords = (np.array([]), np.array([]))
+    
+    if len(coords[0]) > 0:
+        # Находим границы
+        top = coords[0].min()
+        bottom = coords[0].max() + 1
+        left = coords[1].min()
+        right = coords[1].max() + 1
+        
+        # Определяем размер исходного изображения
+        img_height, img_width = img_array.shape
+        
+        # Вычисляем центр bounding box
+        bbox_center_x = (left + right) / 2
+        bbox_center_y = (top + bottom) / 2
+        
+        # Вычисляем центр изображения
+        img_center_x = img_width / 2
+        img_center_y = img_height / 2
+        
+        # Вычисляем смещение от центра (в процентах от размера изображения)
+        offset_x_percent = abs(bbox_center_x - img_center_x) / img_width
+        offset_y_percent = abs(bbox_center_y - img_center_y) / img_height
+        
+        # Порог: если смещение меньше 15% от размера, считаем что уже по центру
+        # Увеличенный порог для рукописных изображений, которые могут быть немного смещены
+        # но при этом уже достаточно центрированы и не требуют перецентрирования
+        CENTER_THRESHOLD = 0.15
+        
+        # Если содержимое уже примерно по центру, просто изменяем размер без центрирования
+        if offset_x_percent < CENTER_THRESHOLD and offset_y_percent < CENTER_THRESHOLD:
+            if target_size:
+                return img_gray.resize(target_size, Image.Resampling.LANCZOS)
+            return img_gray
+        
+        # Если не по центру, центрируем
+        # Вырезаем область с содержимым
+        content_region = img_array[top:bottom, left:right]
+        
+        # Определяем размер выходного изображения
+        if target_size:
+            out_width, out_height = target_size
+        else:
+            out_width, out_height = image.size
+        
+        # Создаем новое изображение с фоном (максимальное значение из исходного)
+        bg_color = int(img_array.max())
+        centered_img = Image.new('L', (out_width, out_height), color=bg_color)
+        
+        # Вычисляем позицию для центрирования
+        content_height, content_width = content_region.shape
+        paste_x = (out_width - content_width) // 2
+        paste_y = (out_height - content_height) // 2
+        
+        # Вставляем содержимое в центр
+        content_pil = Image.fromarray(content_region)
+        centered_img.paste(content_pil, (paste_x, paste_y))
+        
+        return centered_img
+    else:
+        # Если не нашли содержимое, возвращаем исходное изображение с измененным размером если нужно
+        if target_size:
+            return img_gray.resize(target_size, Image.Resampling.LANCZOS)
+        return img_gray
+
+
 class ImageTransform:
     """
     Класс для трансформаций изображений без использования torchvision
     """
-    def __init__(self, resize_size, normalize=True):
+    def __init__(self, resize_size, normalize=True, center_image_flag=True):
         """
         Args:
             resize_size (tuple): Размер для изменения размера (height, width)
             normalize (bool): Нормализовать ли изображение в [-1, 1]
+            center_image_flag (bool): Центрировать ли изображение перед resize
         """
         self.resize_size = resize_size
         self.normalize = normalize
+        self.center_image_flag = center_image_flag
     
     def __call__(self, image):
         """
@@ -44,8 +149,13 @@ class ImageTransform:
         if isinstance(image, Image.Image):
             if image.mode != 'L':
                 image = image.convert('L')
-            # Изменяем размер
-            image = image.resize(self.resize_size[::-1], Image.Resampling.LANCZOS)  # PIL использует (width, height)
+            
+            # Центрируем изображение перед изменением размера (если включено)
+            if self.center_image_flag:
+                image = center_image(image, target_size=self.resize_size[::-1])  # PIL использует (width, height)
+            else:
+                # Изменяем размер без центрирования
+                image = image.resize(self.resize_size[::-1], Image.Resampling.LANCZOS)  # PIL использует (width, height)
         
         # Преобразуем в numpy array
         if isinstance(image, Image.Image):
@@ -76,12 +186,12 @@ def get_transforms(is_training=False):
     Возвращает трансформации для предобработки изображений
     
     Args:
-        is_training (bool): Если True, добавляются аугментации для обучения (TODO)
+        is_training (bool): Если True, добавляются аугментации для обучения (в текущей реализации не используются)
         
     Returns:
         ImageTransform: Объект трансформации
     """
-    return ImageTransform(resize_size=IMAGE_SIZE, normalize=True)
+    return ImageTransform(resize_size=IMAGE_SIZE, normalize=True, center_image_flag=True)
 
 
 class KoreanAlphabetDataset(Dataset):
